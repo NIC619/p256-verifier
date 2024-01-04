@@ -23,6 +23,16 @@ contract P256Test is Test {
         ];
     }
 
+    function testDerivePubkey() public {
+        uint256 privKey = 5566;
+        uint256 pubkeyX = 0x7cf6d3f7262952f904c849ac8d62c7018541ebe7e17cac47637c4970bd8475c6;
+        uint256 pubkeyY = 0x4327be16fd1e874d7085ee588db44ceb346c1f1a065b0ae0577638839348a522;
+        (uint256 x, uint256 y) = p256signer.ecdsa_derivPubkey(privKey);
+
+        assertEq(x, pubkeyX);
+        assertEq(y, pubkeyY);
+    }
+
     function testSigningAgainstVerifier() public {
         uint256 privKey = 123;
         uint256 pubkeyX = 0x811a6c2bd2a547d0dd84747297fec47719e7c3f9b0024f027c2b237be99aac39;

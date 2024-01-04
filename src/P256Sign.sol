@@ -30,6 +30,21 @@ contract P256Sign {
     uint256 constant minus_2modn =
         0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC63254F;
 
+    // ECDSA public key derivation
+    // Copied and modified from https://github.com/rdubois-crypto/FreshCryptoLib/blob/1a484cdfd810046203f37b3e3c794d05720fb99c/solidity/src/FCL_ecdsa_utils.sol#L99-L112
+    function ecdsa_derivPubkey(uint256 privKey) public view returns(uint256 pubkeyX, uint256 pubkeyY) {
+        // Calculate the curve point privKey.G (abuse ecmulmul add with v=0)
+        pubkeyX = ecZZ_mulmuladd(0, 0, privKey, 0);
+        pubkeyY = ec_Decompress(pubkeyX, 1);
+
+        // Extract correct y value
+        if (ecZZ_mulmuladd(pubkeyX, pubkeyY, privKey, n - 1) != 0)
+        {
+            pubkeyY = p - pubkeyY;
+        }        
+
+    }
+
     uint256 constant P256_N_DIV_2 =
         57896044605178124381348723474703786764998477612067880171211129530534256022184;
     /**
@@ -52,6 +67,71 @@ contract P256Sign {
         }
 
         return (r, s);
+    }
+
+    uint256 constant _NOTSQUARE=0xFFFFFFFF00000002000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF;
+    uint256 constant _NOTONCURVE=0xFFFFFFFF00000003000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF;
+    uint256 constant pp1div4=0x3fffffffc0000000400000000000000000000000400000000000000000000000;
+    address constant MODEXP_PRECOMPILE = 0x0000000000000000000000000000000000000005;
+
+    /// @notice Calculate one modular square root of a given integer. Assume that p=3 mod 4.
+    /// @dev Uses the ModExp precompiled contract at address 0x05 for fast computation using little Fermat theorem
+    /// @param self The integer of which to find the modular inverse
+    /// @return result The modular inverse of the input integer. If the modular inverse doesn't exist, it revert the tx
+    function SqrtMod(uint256 self) internal view returns (uint256 result){
+        assembly ("memory-safe") {
+            // load the free memory pointer value
+            let pointer := mload(0x40)
+
+            // Define length of base (Bsize)
+            mstore(pointer, 0x20)
+            // Define the exponent size (Esize)
+            mstore(add(pointer, 0x20), 0x20)
+            // Define the modulus size (Msize)
+            mstore(add(pointer, 0x40), 0x20)
+            // Define variables base (B)
+            mstore(add(pointer, 0x60), self)
+            // Define the exponent (E)
+            mstore(add(pointer, 0x80), pp1div4)
+            // We save the point of the last argument, it will be override by the result
+            // of the precompile call in order to avoid paying for the memory expansion properly
+            let _result := add(pointer, 0xa0)
+            // Define the modulus (M)
+            mstore(_result, p)
+
+            // Call the precompiled ModExp (0x05) https://www.evm.codes/precompiled#0x05
+            if iszero(
+                staticcall(
+                    not(0), // amount of gas to send
+                    MODEXP_PRECOMPILE, // target
+                    pointer, // argsOffset
+                    0xc0, // argsSize (6 * 32 bytes)
+                    _result, // retOffset (we override M to avoid paying for the memory expansion)
+                    0x20 // retSize (32 bytes)
+                )
+            ) { revert(0, 0) }
+
+            result := mload(_result)
+            // result :=addmod(result,0,p)
+        }
+        if(mulmod(result, result, p) != self){
+            result = _NOTSQUARE;
+        }
+        
+        return result;
+    }
+
+    function ec_Decompress(uint256 x, uint256 parity) internal view returns (uint256 y) { 
+        uint256 y2 = mulmod(x, mulmod(x, x, p), p); // x3
+        y2 = addmod(b, addmod(y2, mulmod(x, a, p), p), p); // x3 + ax + b
+
+        y = SqrtMod(y2);
+        if (y == _NOTSQUARE){
+           return _NOTONCURVE;
+        }
+        if ((y & 1) != (parity & 1)){
+            y = p - y;
+        }
     }
 
     /**
